@@ -1,0 +1,2 @@
+# covid
+info about covid
