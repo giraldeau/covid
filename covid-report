@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import urllib.request
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+rx = re.compile("\"[a-zA-Z ,]*\"")
+
+
+def quoterepl(matchobj):
+    s = matchobj.group(0)
+    s = s.replace('"', '')
+    s = s.replace(',', '')
+    return s
+
+
+def unquote(line):
+    if '"' not in line:
+        return line
+    return re.sub(rx, quoterepl, line)
+
+
+def load_frame(path):
+    
+    dataraw = { }
+    
+    with path.open("r") as f:
+        header = f.readline().strip()
+        hdrs = header.split(",")
+        ts = hdrs[4:]
+        
+        for line in f:
+            line = unquote(line)
+            
+            fields = line.strip().split(",")
+            province = fields[0]  # Province
+            country = fields[1]  # Country
+            data = np.array(fields[4:], dtype=float)
+                        
+            label = country
+            if len(province) > 0:
+                label = f"{country}:{province}"
+            
+            dataraw[label] = data
+            
+            if country not in dataraw.keys():
+                dataraw[country] = data
+            else:
+                dataraw[country] += data
+    
+    return dataraw
+
+
+def case_threshold(data, threshold=100.0):
+    for i, val in enumerate(data):
+        if val > threshold:
+            return data[i:]
+    return np.array()
+
+
+def moving_average(x, w):
+    return np.convolve(x, np.ones(w), 'valid') / w
+
+
+def growth_abs(data):
+    out = np.zeros(len(data) - 1)
+    for i in range(len(data) - 1):
+        out[i] = data[i + 1] - data[i]
+    return out
+
+
+def growth_rate(data):
+    out = np.zeros(len(data) - 1)
+    for i in range(len(data) - 1):
+        if data[i] > 0:
+            out[i] = (data[i + 1] - data[i]) / data[i]
+    return out
+
+
+def main():
+    import argparse
+
+    data_url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+    default_data_file = Path(Path(data_url).name)
+
+    parser = argparse.ArgumentParser(description='create covid report')
+    parser.add_argument('report', default="report.json", help='path to json report file')
+    parser.add_argument('datafile', nargs='?', default=None, help='path to data file to use')
+    args = parser.parse_args()
+
+    data_file = args.datafile
+    
+    if data_file is None:
+        if default_data_file.exists():
+            print("using cached data file...")
+            data_file = default_data_file
+        else:
+            print("downloading latest data...")
+            response = urllib.request.urlopen(data_url)
+            content = response.read()
+            default_data_file.write_text(content.decode())
+            data_file = default_data_file
+            print("download done")
+    
+    if data_file is None:
+        print("data file not found")
+        sys.exit(1)
+    
+    data_path = Path(data_file)
+    df = load_frame(data_path)
+    print(f"loaded {len(df.keys())} series")
+    
+    json_path = Path(args.report)
+    report = json.loads(json_path.read_text())
+        
+    print("writing label file... ")
+    labels = list(df.keys())
+    labels.sort()
+    labels_output = "\n".join(labels)
+    Path('labels.txt').write_text(labels_output)
+    
+    print("generating chart... ")
+        
+    fig, ax = plt.subplots()
+    names = report.get('names', [])
+    for name in names:
+        print(f"{name}")
+        data = df[name]
+        data = moving_average(data, 5)
+        smooth_data = moving_average(data, 7)
+        
+        grow_abs_data = growth_abs(data)
+        grow_abs_smooth = moving_average(grow_abs_data, 7)
+        
+        cut = -45
+        y = grow_abs_smooth[cut:]
+        x = np.array([float(i) for i in range(len(y))])
+        
+        ax.plot(x, y, label=name)
+    
+    ax.set_yscale('log')
+    ax.legend()
+    fig.savefig('report_growth_abs.png')
+    
+    fig, ax = plt.subplots()
+    for name in names:
+        print(f"{name}")
+        data = df[name]
+        data = moving_average(data, 5)
+        grow_rate_data = growth_rate(data)
+        grow_rate_smooth = moving_average(grow_rate_data, 7)
+        
+        x = np.array([float(i) for i in range(len(grow_rate_smooth))])
+        
+        cut = -45
+        x_trim = x[cut:]
+        y_trim = grow_rate_smooth[cut:]
+        
+        ax.plot(x_trim, y_trim, label=name)
+
+    ax.legend()
+    ax.set_title(f"Daily covid-19 growth rate according to time")
+    fig.savefig('report_growth_rate.png')
+
+if __name__ == "__main__":
+    main()
