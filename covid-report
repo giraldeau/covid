@@ -65,26 +65,60 @@ def case_threshold(data, threshold=100.0):
     return np.array()
 
 
-def moving_average(x, w):
+def moving_average_conv(x, w):
     return np.convolve(x, np.ones(w), 'valid') / w
+
+
+# This method  preserves the number of samples, but seems
+# to create distorsion for the begin and end values
+def moving_average(x, w):
+    avg = np.zeros(len(x))
+    mid = int(w / 2)
+    pos = []
+    for i in range(w):
+        pos.append(i - mid)
+    
+    end = len(x)
+    div = len(pos)
+    for i in range(end):
+        sum = 0.0
+        for j in pos:
+            idx = i + j
+            if idx < 0:
+                idx = 0
+            if idx >= end:
+                idx = end - 1
+            sum += x[idx]
+        avg[i] = sum / div
+    return avg
 
 
 def growth_abs(data):
     out = np.zeros(len(data) - 1)
-    for i in range(len(data) - 1):
+    for i in range(0, len(data) - 1):
         out[i] = data[i + 1] - data[i]
     return out
 
 
 def growth_rate(data):
-    out = np.zeros(len(data) - 1)
-    for i in range(len(data) - 1):
+    out = np.zeros(len(data))
+    
+    pos = [-1, 1]
+    end = len(data)
+    
+    for i in range(end):
         if data[i] > 0:
-            out[i] = (data[i + 1] - data[i]) / data[i]
+            count = 0
+            for j in pos:
+                idx = i + j
+                if idx >= 0 and idx < len(data):
+                    count += 1
+                    out[i] += (data[idx] - data[i]) / (data[i])
+            out[i] = out[i] / count
     return out
 
 
-def main():
+def main():    
     import argparse
 
     data_url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
@@ -133,16 +167,16 @@ def main():
     for name in names:
         print(f"{name}")
         data = df[name]
-        data = moving_average(data, 5)
-        smooth_data = moving_average(data, 7)
+        data = moving_average_conv(data, 5)
+        smooth_data = moving_average_conv(data, 7)
         
         grow_abs_data = growth_abs(data)
-        grow_abs_smooth = moving_average(grow_abs_data, 7)
+        grow_abs_smooth = moving_average_conv(grow_abs_data, 7)
         
         cut = -45
         y = grow_abs_smooth[cut:]
         x = np.array([float(i) for i in range(len(y))])
-        
+        print(y)
         ax.plot(x, y, label=name)
     
     ax.set_yscale('log')
@@ -153,9 +187,9 @@ def main():
     for name in names:
         print(f"{name}")
         data = df[name]
-        data = moving_average(data, 5)
+        data = moving_average_conv(data, 5)
         grow_rate_data = growth_rate(data)
-        grow_rate_smooth = moving_average(grow_rate_data, 7)
+        grow_rate_smooth = moving_average_conv(grow_rate_data, 7)
         
         x = np.array([float(i) for i in range(len(grow_rate_smooth))])
         
@@ -169,5 +203,51 @@ def main():
     ax.set_title(f"Daily covid-19 growth rate according to time")
     fig.savefig('report_growth_rate.png')
 
-if __name__ == "__main__":
+    fig, ax = plt.subplots()
+    for name in names:
+        print(f"{name}")
+        data = df[name]
+        data = moving_average_conv(data, 15)
+        dx = growth_rate(data)
+        dx2 = growth_rate(dx)
+
+        print("dx2")
+        print(dx2)
+        
+        x = np.array([float(i) for i in range(len(dx2))])
+        
+        cut = -45
+        x_trim = x[cut:]
+        y_trim = dx2[cut:]
+        
+        ax.plot(x_trim, y_trim, label=name)
+        
+    ax.legend()
+    ax.set_title(f"Second derivative daily covid-19 cases according to time")
+    fig.savefig('report_second_derivative.png')
+    
+    fig, ax = plt.subplots()
+    for name in names:
+        print(f"{name}")
+        cases = df[name]
+
+        cases = moving_average_conv(cases, 5)
+        cases = case_threshold(cases, 100)
+        rate = growth_abs(cases)
+        
+        cases = cases[:-1]
+        
+        print(cases)
+        print(rate)
+        
+        x = np.array([float(i) for i in range(len(cases))])
+                
+        ax.loglog(cases, rate, label=name)
+        
+    ax.legend()
+    ax.set_title(f"Daily covid-19 growth rate according to number of cases")
+    fig.savefig('report_rate_according_to_cases.png')
+
+    
+if __name__ == "__main__":    
     main()
